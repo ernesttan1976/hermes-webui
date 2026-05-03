@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.ernest.hermes-webui</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>/Volumes/MyCrucial/raid/hermes-webui/scripts/hermes-run-terminal.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Volumes/MyCrucial/raid/hermes-webui</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+      <key>SuccessfulExit</key>
+      <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>${HOME}/Library/Logs/Hermes/hermes-webui-launchd.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>${HOME}/Library/Logs/Hermes/hermes-webui-launchd.err</string>
+  </dict>
+</plist>

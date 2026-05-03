@@ -29,9 +29,9 @@ services:
       - "127.0.0.1:8642:8642"
     volumes:
       # Persist config, state, sessions, skills, memory across restarts
-      - hermes-home:/home/hermes/.hermes
+      - ./docker-volumes/hermes-home:/home/hermes/.hermes
       # Expose agent source so the WebUI can install dependencies from it
-      - hermes-agent-src:/opt/hermes
+      #- ./docker-volumes/hermes-agent-src:/opt/hermes
     environment:
       - HERMES_HOME=/home/hermes/.hermes
       - HERMES_UID=${HERMES_UID:-10000}
@@ -52,7 +52,7 @@ services:
     ports:
       - "127.0.0.1:9119:9119"
     volumes:
-      - hermes-home:/home/hermes/.hermes
+      - ./docker-volumes/hermes-home:/home/hermes/.hermes
     environment:
       - HERMES_HOME=/home/hermes/.hermes
       - HERMES_UID=${HERMES_UID:-10000}
@@ -81,15 +81,15 @@ services:
       - "127.0.0.1:8787:8787"
     volumes:
       # Same hermes home as the agent — shares config, sessions, state
-      - hermes-home:/home/hermeswebui/.hermes
+      - ./docker-volumes/hermes-home:/home/hermeswebui/.hermes
       # Agent source mounted where docker_init.bash expects it.
       # At startup the init script runs:
       #   uv pip install /home/hermeswebui/.hermes/hermes-agent
       # which installs the agent and all its Python dependencies.
-      - hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent
+      - ./docker-volumes/hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent
       # Workspace directory — browse and edit files from the WebUI.
       # Adapt the host path to your project directory.
-      - ${HERMES_WORKSPACE:-~/workspace}:/workspace
+      - .:/workspace
     environment:
       - HERMES_WEBUI_HOST=0.0.0.0
       - HERMES_WEBUI_PORT=8787
