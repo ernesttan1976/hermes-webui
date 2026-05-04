@@ -4,7 +4,7 @@
 # at 127.0.0.1:8642, managed by scripts/hermes-watcher.sh.
 #
 # From inside Docker, the host agent is reachable at:
-#   http://host.docker.internal:8642
+#   http://127.0.0.1:8643
 #
 # Usage:
 #   docker compose -f docker-compose.watcher.yml up -d
@@ -30,7 +30,7 @@ services:
       - HERMES_UID=${HERMES_UID:-10000}
       - HERMES_GID=${HERMES_GID:-10000}
       # Dashboard connects to the host gateway for health/session data
-      - GATEWAY_HEALTH_URL=http://host.docker.internal:8642
+      - GATEWAY_HEALTH_URL=http://127.0.0.1:8643
     restart: unless-stopped
     deploy:
       resources:
@@ -68,7 +68,7 @@ services:
       - WANTED_UID=${UID:-1000}
       - WANTED_GID=${GID:-1000}
       # Configure WebUI to talk to host gateway
-      - HERMES_GATEWAY_URL=http://host.docker.internal:8642
+      - HERMES_GATEWAY_URL=http://127.0.0.1:8643
       # Optional: set a password for remote access
       # - HERMES_WEBUI_PASSWORD=your-secret-password
     restart: unless-stopped

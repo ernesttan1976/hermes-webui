@@ -8,10 +8,13 @@ set -euo pipefail
 PORT=8642
 CHECK_INTERVAL=10
 WAIT_BEFORE_START=30
+# HTTP health check URL (default points to local gateway health endpoint)
+HEALTH_URL="http://127.0.0.1:${PORT}/health"
 GATEWAY_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)/hermes_gateway.sh"
 
-# Track the last Terminal window id we opened on macOS (if any)
+# Track the last Terminal window ids we opened on macOS (if any)
 LAST_TERMINAL_WINDOW_ID=""
+LAST_LOG_WINDOW_ID=""
 
 if [ ! -x "$GATEWAY_SCRIPT" ]; then
   echo "Making gateway script executable: $GATEWAY_SCRIPT"
@@ -19,13 +22,26 @@ if [ ! -x "$GATEWAY_SCRIPT" ]; then
 fi
 
 function is_port_open() {
-  # Try lsof first (macOS/Linux), then ss (linux), then netstat as fallback
+  # Prefer an HTTP health check to determine service health.
+  # If HEALTH_URL is set (default: http://127.0.0.1:$PORT/health), use curl or wget.
+  if [[ -n "${HEALTH_URL:-}" ]]; then
+    if command -v curl >/dev/null 2>&1; then
+      # -s: silent, -f: fail on non-2xx, --max-time: timeout in seconds
+      curl --max-time 3 -sf "$HEALTH_URL" >/dev/null 2>&1 && return 0 || return 1
+    elif command -v wget >/dev/null 2>&1; then
+      wget -q --timeout=3 --spider "$HEALTH_URL" >/dev/null 2>&1 && return 0 || return 1
+    else
+      # No HTTP client available; fall through to port check
+      :
+    fi
+  fi
+
+  # Fallback: Try lsof (macOS/Linux), then ss (linux), then netstat as last resort
   if command -v lsof >/dev/null 2>&1; then
     lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1 && return 0 || return 1
   elif command -v ss >/dev/null 2>&1; then
     ss -ltn | awk '{print $4}' | grep -q ":$PORT$" && return 0 || return 1
   else
-    # netstat fallback
     netstat -an 2>/dev/null | grep -E "LISTEN|LISTENING" | grep -q ".$PORT" && return 0 || return 1
   fi
 }
@@ -55,58 +71,34 @@ function start_gateway_terminal() {
   echo "Starting hermes gateway using Terminal (if available) or background process."
 
   if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS: prefer AppleScript so we can capture the window id and avoid opening multiple windows
     if command -v osascript >/dev/null 2>&1; then
-      # If we have a previously recorded Terminal window id, check if it still exists.
-      if [[ -n "$LAST_TERMINAL_WINDOW_ID" ]]; then
-        local still_exists
-        still_exists=$(osascript <<EOF
-          tell application "Terminal"
-            set existing_windows to id of every window
-            if existing_windows contains $LAST_TERMINAL_WINDOW_ID then
-              return "yes"
-            else
-              return "no"
-            end if
-          end tell
-EOF
-        )
-        if [[ "$still_exists" == "yes" ]]; then
-          echo "Previous Terminal window id $LAST_TERMINAL_WINDOW_ID still open; not opening a new one."
-          return
-        else
-          echo "Previous Terminal window id $LAST_TERMINAL_WINDOW_ID is gone; clearing tracking."
-          LAST_TERMINAL_WINDOW_ID=""
-        fi
-      fi
-
-      # Either no previous window tracked or it is closed: open a new Terminal window running the script
-      LAST_TERMINAL_WINDOW_ID=$(osascript <<EOF
+      # macOS + AppleScript: open two Terminal windows/tabs (gateway + log tail)
+      osascript <<EOF
         tell application "Terminal"
-          set newTab to do script "${GATEWAY_SCRIPT}"
-          set newWindow to front window
-          return id of newWindow
+          activate
+          do script "${GATEWAY_SCRIPT}"
+          do script "tail -F ~/.hermes/logs/gateway.log"
         end tell
 EOF
-      )
-      echo "Started hermes gateway in Terminal window id $LAST_TERMINAL_WINDOW_ID"
+      echo "Started hermes gateway and log tail in Terminal."
     elif command -v open >/dev/null 2>&1 && [[ -d /Applications/Utilities/Terminal.app ]]; then
-      # Fallback: 'open' (no reliable tracking, but at least avoid multiple via LAST_TERMINAL_WINDOW_ID)
-      if [[ -n "$LAST_TERMINAL_WINDOW_ID" ]]; then
-        echo "Terminal window previously opened (id $LAST_TERMINAL_WINDOW_ID); skipping new open via 'open'."
-        return
-      fi
+      # Fallback: open gateway script; tail in background
       open -a Terminal "$GATEWAY_SCRIPT" || true
-      LAST_TERMINAL_WINDOW_ID="open-fallback"
+      (sleep 1; tail -F ~/.hermes/logs/gateway.log) &
+      echo "Started hermes gateway in Terminal and background tail of gateway log."
     else
-      # Last resort: run in background in this shell
+      # Last resort: run both in background in this shell
       bash "$GATEWAY_SCRIPT" &
       echo "Started gateway in background with PID $! (no Terminal control)"
+      (sleep 1; tail -F ~/.hermes/logs/gateway.log) &
+      echo "Started background tail of gateway log"
     fi
   else
-    # Non-macOS: just start background process (no window management)
+    # Non-macOS: just start background process and tail in background
     bash "$GATEWAY_SCRIPT" &
     echo "Started gateway in background with PID $!"
+    (sleep 1; tail -F ~/.hermes/logs/gateway.log) &
+    echo "Started background tail of gateway log"
   fi
 }
 
