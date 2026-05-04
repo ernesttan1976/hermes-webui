@@ -1,0 +1,80 @@
+# Watcher-based Docker Compose: Dashboard + WebUI only
+#
+# This stack assumes a hermes-agent process is running on the macOS host
+# at 127.0.0.1:8642, managed by scripts/hermes-watcher.sh.
+#
+# From inside Docker, the host agent is reachable at:
+#   http://host.docker.internal:8642
+#
+# Usage:
+#   docker compose -f docker-compose.watcher.yml up -d
+#
+# Services:
+#   hermes-dashboard — monitoring dashboard on port 9119
+#   hermes-webui     — browser chat interface on port 8787
+#
+# Both share the same hermes-home directory as the host agent so config,
+# sessions, skills, and memory are consistent across all surfaces.
+
+services:
+  hermes-dashboard:
+    image: nousresearch/hermes-agent:latest
+    container_name: hermes-dashboard-watcher
+    command: dashboard --host 0.0.0.0 --insecure
+    ports:
+      - "127.0.0.1:9119:9119"
+    volumes:
+      - ./docker-volumes/hermes-home:/home/hermes/.hermes
+    environment:
+      - HERMES_HOME=/home/hermes/.hermes
+      - HERMES_UID=${HERMES_UID:-10000}
+      - HERMES_GID=${HERMES_GID:-10000}
+      # Dashboard connects to the host gateway for health/session data
+      - GATEWAY_HEALTH_URL=http://host.docker.internal:8642
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    networks:
+      - hermes-net-watcher
+
+  hermes-webui:
+    image: ghcr.io/nesquena/hermes-webui:latest
+    container_name: hermes-webui-watcher
+    ports:
+      # Expose on localhost only. Remove 127.0.0.1: to expose on all interfaces
+      # (set HERMES_WEBUI_PASSWORD if doing so).
+      - "127.0.0.1:8787:8787"
+    volumes:
+      # Same hermes home as the host agent — shares config, sessions, state
+      - ./docker-volumes/hermes-home:/home/hermeswebui/.hermes
+      # Agent source mounted where docker_init.bash expects it.
+      # At startup the init script runs:
+      #   uv pip install /home/hermeswebui/.hermes/hermes-agent
+      # which installs the agent and all its Python dependencies.
+      - ./docker-volumes/hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent
+      # Workspace directory — browse and edit files from the WebUI.
+      - .:/workspace
+    environment:
+      - HERMES_WEBUI_HOST=0.0.0.0
+      - HERMES_WEBUI_PORT=8787
+      - HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui
+      # Match your host user's UID/GID for correct file permissions.
+      # Run `id -u` and `id -g` to find your values.
+      # On macOS, UIDs start at 501 (not 1000) — set these in a .env file:
+      #   echo "UID=$(id -u)" >> .env && echo "GID=$(id -g)" >> .env
+      - WANTED_UID=${UID:-1000}
+      - WANTED_GID=${GID:-1000}
+      # Configure WebUI to talk to host gateway
+      - HERMES_GATEWAY_URL=http://host.docker.internal:8642
+      # Optional: set a password for remote access
+      # - HERMES_WEBUI_PASSWORD=your-secret-password
+    restart: unless-stopped
+    networks:
+      - hermes-net-watcher
+
+networks:
+  hermes-net-watcher:
+    driver: bridge
