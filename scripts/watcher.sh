@@ -2,17 +2,16 @@
 set -euo pipefail
 
 # Watch for a healthy process listening on port 8642.
-# If none is found, wait 30s and start hermes_gateway.sh in a new terminal window.
-# This script is intended for macOS (uses "open -a Terminal"), but will fall back to starting
-# the script in the background if Terminal isn't available.
+# If none is found, wait 30s and start hermes_gateway.sh in a new Terminal tab/window.
+# This script is intended for macOS (uses AppleScript/Terminal), with simple fallbacks.
 
 PORT=8642
 CHECK_INTERVAL=10
 WAIT_BEFORE_START=30
 GATEWAY_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)/hermes_gateway.sh"
 
-# Track the last child terminal PID we started (if any)
-LAST_CHILD_PID=""
+# Track the last Terminal window id we opened on macOS (if any)
+LAST_TERMINAL_WINDOW_ID=""
 
 if [ ! -x "$GATEWAY_SCRIPT" ]; then
   echo "Making gateway script executable: $GATEWAY_SCRIPT"
@@ -56,41 +55,64 @@ function start_gateway_terminal() {
   echo "Starting hermes gateway using Terminal (if available) or background process."
 
   if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS: try to open a new Terminal window and run the script
-    if command -v open >/dev/null 2>&1 && [[ -d /Applications/Utilities/Terminal.app ]]; then
-      # 'open' doesn't give us a PID, so we can't track/kill this terminal reliably
+    # macOS: prefer AppleScript so we can capture the window id and avoid opening multiple windows
+    if command -v osascript >/dev/null 2>&1; then
+      # If we have a previously recorded Terminal window id, check if it still exists.
+      if [[ -n "$LAST_TERMINAL_WINDOW_ID" ]]; then
+        local still_exists
+        still_exists=$(osascript <<EOF
+          tell application "Terminal"
+            set existing_windows to id of every window
+            if existing_windows contains $LAST_TERMINAL_WINDOW_ID then
+              return "yes"
+            else
+              return "no"
+            end if
+          end tell
+EOF
+        )
+        if [[ "$still_exists" == "yes" ]]; then
+          echo "Previous Terminal window id $LAST_TERMINAL_WINDOW_ID still open; not opening a new one."
+          return
+        else
+          echo "Previous Terminal window id $LAST_TERMINAL_WINDOW_ID is gone; clearing tracking."
+          LAST_TERMINAL_WINDOW_ID=""
+        fi
+      fi
+
+      # Either no previous window tracked or it is closed: open a new Terminal window running the script
+      LAST_TERMINAL_WINDOW_ID=$(osascript <<EOF
+        tell application "Terminal"
+          set newTab to do script "${GATEWAY_SCRIPT}"
+          set newWindow to front window
+          return id of newWindow
+        end tell
+EOF
+      )
+      echo "Started hermes gateway in Terminal window id $LAST_TERMINAL_WINDOW_ID"
+    elif command -v open >/dev/null 2>&1 && [[ -d /Applications/Utilities/Terminal.app ]]; then
+      # Fallback: 'open' (no reliable tracking, but at least avoid multiple via LAST_TERMINAL_WINDOW_ID)
+      if [[ -n "$LAST_TERMINAL_WINDOW_ID" ]]; then
+        echo "Terminal window previously opened (id $LAST_TERMINAL_WINDOW_ID); skipping new open via 'open'."
+        return
+      fi
       open -a Terminal "$GATEWAY_SCRIPT" || true
-      LAST_CHILD_PID=""
-    elif command -v osascript >/dev/null 2>&1; then
-      # osascript also doesn't give us a PID; run without tracking
-      osascript -e "tell application \"Terminal\" to do script \"$GATEWAY_SCRIPT\"" || true
-      LAST_CHILD_PID=""
+      LAST_TERMINAL_WINDOW_ID="open-fallback"
     else
-      # Fallback: run in background in this shell, tracking PID
+      # Last resort: run in background in this shell
       bash "$GATEWAY_SCRIPT" &
-      LAST_CHILD_PID=$!
-      echo "Started gateway in background with PID $LAST_CHILD_PID"
+      echo "Started gateway in background with PID $! (no Terminal control)"
     fi
   else
-    # Linux / other: try gnome-terminal, xterm, or background
-    if command -v gnome-terminal >/dev/null 2>&1; then
-      gnome-terminal -- "$GATEWAY_SCRIPT" || true
-      LAST_CHILD_PID=""
-    elif command -v xterm >/dev/null 2>&1; then
-      xterm -e "$GATEWAY_SCRIPT" &
-      LAST_CHILD_PID=$!
-      echo "Started gateway in xterm with PID $LAST_CHILD_PID"
-    else
-      bash "$GATEWAY_SCRIPT" &
-      LAST_CHILD_PID=$!
-      echo "Started gateway in background with PID $LAST_CHILD_PID"
-    fi
+    # Non-macOS: just start background process (no window management)
+    bash "$GATEWAY_SCRIPT" &
+    echo "Started gateway in background with PID $!"
   fi
 }
 
 while true; do
   if is_port_open; then
-    # Process listening - healthy
+    # Process listening - healthy: do NOT start any new Terminal
     sleep $CHECK_INTERVAL
     continue
   fi
@@ -101,33 +123,15 @@ while true; do
   # Double-check after waiting
   if is_port_open; then
     echo "Process started during wait. Skipping start."
-    # If we had a child terminal/background process from a previous attempt, and the
-    # port is now healthy, close/kill that previous child if we can.
-    if [[ -n "$LAST_CHILD_PID" ]]; then
-      if kill -0 "$LAST_CHILD_PID" 2>/dev/null; then
-        echo "Port is healthy; terminating previous child process $LAST_CHILD_PID."
-        kill "$LAST_CHILD_PID" || true
-      fi
-      LAST_CHILD_PID=""
-    fi
     sleep $CHECK_INTERVAL
     continue
   fi
 
-  # At this point, port is still not open after waiting.
-  # If we still have a previous child process recorded, and it's alive, close it.
-  if [[ -n "$LAST_CHILD_PID" ]]; then
-    if kill -0 "$LAST_CHILD_PID" 2>/dev/null; then
-      echo "Port still not healthy; terminating previous child process $LAST_CHILD_PID before starting a new one."
-      kill "$LAST_CHILD_PID" || true
-    fi
-    LAST_CHILD_PID=""
-  fi
-
-  # Ensure any old gateway process is terminated before starting a new one
+  # At this point the app is still not running (port closed).
+  # Only now are we allowed to start a Terminal for the gateway, and we will
+  # only open a new one if the previous Terminal window is closed (handled
+  # inside start_gateway_terminal).
   kill_port_processes
-
-  # Start a new gateway terminal/background process and record PID when possible
   start_gateway_terminal
 
   # Give the process some time then re-check
